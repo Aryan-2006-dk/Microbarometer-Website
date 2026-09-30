@@ -1,0 +1,1145 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Infrasonic Microbarometer — Station 01</title>
+
+<!--
+  Talks to the Flask backend in ../backend/app.py.
+  If you host this file somewhere other than that backend (e.g. GitHub
+  Pages while the backend runs elsewhere), change API_BASE below to the
+  backend's full URL, e.g. "https://your-backend.example.com".
+-->
+
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=Inter:wght@400;500;600&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css">
+
+<style>
+  :root {
+    --bg: #0B0F14;
+    --panel: #131922;
+    --border: #232B36;
+    --text: #E7ECF2;
+    --text-dim: #8B96A5;
+    --teal: #2FD7C4;
+    --amber: #F0A63A;
+    --blue: #5EA8F0;
+    --red: #E2574C;
+    --purple: #A78BFA;
+  }
+
+  * { box-sizing: border-box; }
+  [hidden] { display: none !important; }
+
+  body {
+    margin: 0;
+    background: var(--bg);
+    color: var(--text);
+    font-family: 'Inter', system-ui, sans-serif;
+    padding: 24px;
+  }
+
+  header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    flex-wrap: wrap;
+    gap: 12px;
+    border-bottom: 1px solid var(--border);
+    padding-bottom: 16px;
+    margin-bottom: 20px;
+  }
+
+  header h1 { font-size: 18px; font-weight: 600; margin: 0; }
+  header h1 span { color: var(--text-dim); font-weight: 400; }
+
+  .header-right {
+    display: flex;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: 16px;
+  }
+
+  .mode-toggle {
+    display: inline-flex;
+    border: 1px solid var(--border);
+    border-radius: 4px;
+    overflow: hidden;
+  }
+
+  .mode-toggle button {
+    border: 0;
+    border-radius: 0;
+    background: #1a222d;
+  }
+
+  .mode-toggle button + button { border-left: 1px solid var(--border); }
+  .mode-toggle button.active { background: var(--teal); color: #06231f; }
+  .mode-toggle button.active:hover { color: #06231f; }
+
+  .status {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    font-size: 13px;
+    color: var(--text-dim);
+    font-family: 'IBM Plex Mono', monospace;
+  }
+
+  .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--text-dim); }
+  .dot.live { background: var(--teal); }
+  .dot.stale { background: var(--amber); }
+  .dot.file { background: var(--blue); }
+
+  @media (prefers-reduced-motion: no-preference) {
+    .dot.live { animation: pulse 2s ease-in-out infinite; }
+  }
+
+  @keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.4; } }
+
+  .panel {
+    background: var(--panel);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    padding: 16px;
+    margin-bottom: 16px;
+  }
+
+  .panel h2 { font-size: 13px; font-weight: 500; color: var(--text-dim); margin: 0 0 12px 0; }
+
+  .panel-head {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    flex-wrap: wrap;
+    gap: 12px;
+    margin-bottom: 12px;
+  }
+
+  .panel-head h2 { margin: 0; }
+
+  .controls { display: flex; gap: 10px; flex-wrap: wrap; align-items: center; }
+
+  .controls label, .cal-form label {
+    font-size: 12px;
+    color: var(--text-dim);
+    display: flex;
+    align-items: center;
+    gap: 6px;
+  }
+
+  select, input[type=number], textarea {
+    background: #1a222d;
+    color: var(--text);
+    border: 1px solid var(--border);
+    border-radius: 4px;
+    padding: 5px 8px;
+    font-family: 'IBM Plex Mono', monospace;
+    font-size: 12px;
+  }
+
+  input[type=number] { width: 120px; }
+
+  textarea { width: 100%; max-width: 360px; resize: vertical; }
+
+  .hero canvas { height: 280px !important; }
+
+  #map { height: 160px; border-radius: 4px; margin-bottom: 12px; background: #1a222d; }
+
+  .readouts { display: flex; gap: 24px; }
+  .readout-label { font-size: 12px; color: var(--text-dim); margin-bottom: 4px; }
+  .readout-value { font-family: 'IBM Plex Mono', monospace; font-size: 22px; font-weight: 500; }
+  .readout-unit { font-size: 13px; color: var(--text-dim); font-weight: 400; }
+
+  button, .file-btn {
+    background: #1a222d;
+    color: var(--text);
+    border: 1px solid var(--border);
+    border-radius: 4px;
+    padding: 6px 12px;
+    font-family: 'IBM Plex Mono', monospace;
+    font-size: 12px;
+    cursor: pointer;
+  }
+
+  button:hover, .file-btn:hover { border-color: var(--teal); color: var(--teal); }
+
+  .file-btn { position: relative; display: inline-block; }
+  .file-btn input { position: absolute; inset: 0; opacity: 0; cursor: pointer; width: 100%; }
+  .file-btn:focus-within { outline: 2px solid var(--teal); outline-offset: 2px; }
+
+  .hint-text { font-size: 12px; color: var(--text-dim); margin: 8px 0 0 0; line-height: 1.5; }
+
+  .msg { font-size: 12px; margin: 8px 0 0 0; font-family: 'IBM Plex Mono', monospace; color: var(--text-dim); min-height: 1em; }
+  .msg.ok { color: var(--teal); }
+  .msg.warn { color: var(--amber); }
+  .msg.error { color: var(--red); }
+
+  .equation {
+    font-family: 'IBM Plex Mono', monospace;
+    font-size: 14px;
+    margin: 0 0 12px 0;
+    color: var(--text);
+  }
+
+  .cal-form { display: flex; gap: 12px; flex-wrap: wrap; align-items: center; margin: 12px 0; }
+
+  details { margin-top: 8px; }
+  summary { font-size: 12px; color: var(--text-dim); cursor: pointer; }
+
+  .table-wrap { max-height: 320px; overflow: auto; }
+
+  table { width: 100%; border-collapse: collapse; font-family: 'IBM Plex Mono', monospace; font-size: 12px; }
+
+  th, td { text-align: left; padding: 6px 12px; border-bottom: 1px solid var(--border); white-space: nowrap; }
+
+  th { color: var(--text-dim); font-weight: 500; position: sticky; top: 0; background: var(--panel); }
+</style>
+</head>
+<body>
+
+<header>
+  <h1>Infrasonic Microbarometer <span>— Station 01</span></h1>
+  <div class="header-right">
+    <div class="mode-toggle" role="group" aria-label="Data source">
+      <button id="modeLive" class="active" type="button">Live sensor</button>
+      <button id="modeCsv" type="button">Upload CSV</button>
+    </div>
+    <div class="status">
+      <span class="dot" id="statusDot"></span>
+      <span id="statusText">waiting for first reading…</span>
+    </div>
+  </div>
+</header>
+
+<div class="panel" id="csvPanel" hidden>
+  <div class="panel-head">
+    <h2>Uploaded data</h2>
+    <label class="file-btn">Choose CSV file<input type="file" id="csvFile" accept=".csv,text/csv"></label>
+  </div>
+  <p class="hint-text">
+    The file needs a time column (Time_s, or a timestamp) and either a capacitance column
+    (e.g. Differential_capacitance_pF) or Raw_decimal AD7746 codes. Pressure is always calculated from
+    capacitance using the calibration below, so any pressure column in the file is ignored.
+  </p>
+  <p class="msg" id="csvMsg"></p>
+</div>
+
+<div class="panel hero">
+  <div class="panel-head">
+    <h2 id="chartTitle">Pressure vs time</h2>
+    <div class="controls">
+      <label>Graph
+        <select id="graphSelect">
+          <option value="pressure">Pressure vs time</option>
+          <option value="capacitance">Capacitance vs time</option>
+          <option value="humidity">Humidity vs time</option>
+          <option value="temperature">Temperature vs time</option>
+          <option value="fft">FFT of pressure</option>
+          <option value="pvc">Pressure vs capacitance</option>
+        </select>
+      </label>
+      <label>Style
+        <select id="styleSelect"></select>
+      </label>
+    </div>
+  </div>
+  <canvas id="mainChart"></canvas>
+  <p class="hint-text" id="chartNote"></p>
+</div>
+
+<div class="panel" id="locationPanel">
+  <h2>Station location + current readings</h2>
+  <div id="map"></div>
+  <div class="readouts">
+    <div>
+      <div class="readout-label">Humidity</div>
+      <div class="readout-value" id="humValue">—<span class="readout-unit"> %RH</span></div>
+    </div>
+    <div>
+      <div class="readout-label">Temperature</div>
+      <div class="readout-value" id="tempValue">—<span class="readout-unit"> °C</span></div>
+    </div>
+  </div>
+</div>
+
+<div class="panel" id="calPanel">
+  <h2>Calibration — pressure from capacitance</h2>
+  <p class="equation" id="calEquation"></p>
+  <div class="cal-form">
+    <label>Sensitivity a <input type="number" id="calSlope" step="any"> pF/Pa</label>
+    <label>Offset b <input type="number" id="calOffset" step="any"> pF</label>
+    <button id="calApply" type="button">Apply</button>
+    <button id="calReset" type="button">Reset to defaults</button>
+  </div>
+  <details>
+    <summary>Calibration points and line fit</summary>
+    <p class="hint-text">One pair per line: differential pressure (Pa), capacitance (pF). These are the points shown on the pressure vs capacitance graph.</p>
+    <textarea id="calPoints" rows="8" spellcheck="false"></textarea>
+    <div class="cal-form"><button id="calFit" type="button">Fit line from these points</button></div>
+  </details>
+  <p class="msg" id="calMsg"></p>
+</div>
+
+<div class="panel" id="exportPanel">
+  <div class="panel-head">
+    <h2>Export data</h2>
+    <div class="controls">
+      <button id="downloadCsv" type="button">Download CSV</button>
+      <button id="downloadJson" type="button">Download JSON</button>
+    </div>
+  </div>
+  <p class="hint-text">Exports every reading stored on this station, not just what's plotted above.</p>
+</div>
+
+<div class="panel">
+  <h2>Raw data</h2>
+  <div class="table-wrap">
+    <table id="rawTable">
+      <thead id="rawTableHead"></thead>
+      <tbody id="rawTableBody"></tbody>
+    </table>
+  </div>
+  <p class="hint-text" id="rawNote"></p>
+</div>
+
+<script src="vendor/chart.umd.js"></script>
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+<script>
+  // ===== ANALYSIS START (pure functions, no DOM - tested against the Python scripts) =====
+
+  const AD7746_FULL_SCALE_PF = 4.096;
+
+  // AD7746 24-bit code -> differential capacitance in pF (offset-binary, +/-4.096 pF).
+  function rawToPf(raw) {
+    return (raw - 8388608) / 8388608 * AD7746_FULL_SCALE_PF;
+  }
+
+  // Calibration is stored the way it was measured:  C = slope * dP + offset.
+  function pressureFromC(c, cal) { return (c - cal.offset) / cal.slope; }
+  function capFromPressure(p, cal) { return cal.slope * p + cal.offset; }
+
+  function median(values) {
+    const s = Array.from(values).sort((a, b) => a - b);
+    const m = s.length >> 1;
+    return s.length % 2 ? s[m] : (s[m - 1] + s[m]) / 2;
+  }
+
+  // Least-squares line y = slope*x + intercept (same as numpy.polyfit(x, y, 1)) plus R^2.
+  function linearFit(xs, ys) {
+    const n = xs.length;
+    if (n < 2) return null;
+    let mx = 0, my = 0;
+    for (let i = 0; i < n; i++) { mx += xs[i]; my += ys[i]; }
+    mx /= n; my /= n;
+    let sxx = 0, sxy = 0;
+    for (let i = 0; i < n; i++) {
+      sxx += (xs[i] - mx) * (xs[i] - mx);
+      sxy += (xs[i] - mx) * (ys[i] - my);
+    }
+    if (sxx === 0) return null;
+    const slope = sxy / sxx;
+    const intercept = my - slope * mx;
+    return { slope, intercept, r2: rSquared(xs, ys, slope, intercept) };
+  }
+
+  function rSquared(xs, ys, slope, intercept) {
+    const n = ys.length;
+    let my = 0;
+    for (let i = 0; i < n; i++) my += ys[i];
+    my /= n;
+    let ssRes = 0, ssTot = 0;
+    for (let i = 0; i < n; i++) {
+      const fit = slope * xs[i] + intercept;
+      ssRes += (ys[i] - fit) * (ys[i] - fit);
+      ssTot += (ys[i] - my) * (ys[i] - my);
+    }
+    return ssTot === 0 ? 1 : 1 - ssRes / ssTot;
+  }
+
+  // "19.62, 0.27" per line -> [[19.62, 0.27], ...]
+  function parseCalPoints(text) {
+    const points = [];
+    const lines = text.split(/\r?\n/);
+    for (let i = 0; i < lines.length; i++) {
+      const line = lines[i].trim();
+      if (!line || line.startsWith('#')) continue;
+      const parts = line.split(/[,;\s]+/).filter(Boolean);
+      const p = parseFloat(parts[0]);
+      const c = parseFloat(parts[1]);
+      if (parts.length !== 2 || !Number.isFinite(p) || !Number.isFinite(c)) {
+        return { points: null, error: `Line ${i + 1}: expected "pressure, capacitance" (two numbers).` };
+      }
+      points.push([p, c]);
+    }
+    if (points.length < 2) return { points: null, error: 'Need at least two calibration points.' };
+    return { points, error: null };
+  }
+
+  function splitCsvLine(line) {
+    const out = [];
+    let cur = '', inQuotes = false;
+    for (let i = 0; i < line.length; i++) {
+      const ch = line[i];
+      if (inQuotes) {
+        if (ch === '"') {
+          if (line[i + 1] === '"') { cur += '"'; i++; } else inQuotes = false;
+        } else cur += ch;
+      } else if (ch === '"') inQuotes = true;
+      else if (ch === ',') { out.push(cur); cur = ''; }
+      else cur += ch;
+    }
+    out.push(cur);
+    return out.map(s => s.trim());
+  }
+
+  // Reads an uploaded CSV. Finds columns by name, so both the AD7746 capture format
+  // (Sample, Time_s, Raw_hex, Raw_decimal, Differential_capacitance_pF) and this
+  // dashboard's own exported CSV work. Throws an Error with a readable message.
+  function parseCsv(text, cal) {
+    const lines = text.replace(/^\uFEFF/, '').split(/\r?\n/).filter(l => l.trim() !== '');
+    if (lines.length < 2) throw new Error('The file has no data rows.');
+
+    const header = splitCsvLine(lines[0]);
+    const norm = header.map(h => h.toLowerCase().replace(/[^a-z0-9]/g, ''));
+    const find = (test) => norm.findIndex(test);
+
+    const iSeconds = find(h => ['times', 'time', 'timesec', 'timeseconds', 'seconds', 't'].includes(h));
+    const iStamp = find(h => h.includes('timestamp') || h === 'datetime' || h === 'date');
+    const iCap = find(h => h.includes('capacitance'));
+    const iRawDec = find(h => ['rawdecimal', 'rawdec', 'rawcode'].includes(h));
+    const iRawHex = find(h => ['rawhex', 'hex'].includes(h));
+    const iPress = find(h => h.includes('pressure'));
+    const iHum = find(h => h.includes('humid'));
+    const iTemp = find(h => h.includes('temp'));
+
+    const timeKind = iSeconds >= 0 ? 'seconds' : 'datetime';
+    const iTime = iSeconds >= 0 ? iSeconds : iStamp;
+    if (iTime < 0) {
+      throw new Error(`Couldn't find a time column (looked for Time_s or timestamp). Columns found: ${header.join(', ')}`);
+    }
+
+    let capSource;
+    if (iCap >= 0) capSource = header[iCap];
+    else if (iRawDec >= 0) capSource = `${header[iRawDec]} (converted to pF)`;
+    else if (iPress >= 0) capSource = `${header[iPress]} (converted back to pF with the current calibration)`;
+    else throw new Error(`Couldn't find a capacitance column. Columns found: ${header.join(', ')}`);
+
+    const num = (cells, i) => {
+      if (i < 0 || cells[i] === undefined || cells[i] === '') return null;
+      const v = parseFloat(cells[i]);
+      return Number.isFinite(v) ? v : null;
+    };
+
+    const rows = [];
+    let skipped = 0;
+    for (let li = 1; li < lines.length; li++) {
+      const cells = splitCsvLine(lines[li]);
+      const t = timeKind === 'seconds' ? num(cells, iTime) : Date.parse(cells[iTime]);
+      let capacitance;
+      if (iCap >= 0) capacitance = num(cells, iCap);
+      else if (iRawDec >= 0) { const raw = num(cells, iRawDec); capacitance = raw === null ? null : rawToPf(raw); }
+      else { const p = num(cells, iPress); capacitance = p === null ? null : capFromPressure(p, cal); }
+
+      if (!Number.isFinite(t) || !Number.isFinite(capacitance)) { skipped++; continue; }
+      rows.push({
+        t,
+        capacitance,
+        humidity: num(cells, iHum),
+        temperature: num(cells, iTemp),
+        rawHex: iRawHex >= 0 ? (cells[iRawHex] || null) : null,
+        rawDec: iRawDec >= 0 ? num(cells, iRawDec) : null,
+      });
+    }
+
+    if (rows.length < 2) throw new Error('Fewer than two readable rows in the file.');
+    rows.sort((a, b) => a.t - b.t);
+
+    return {
+      rows,
+      timeKind,
+      skipped,
+      used: { time: header[iTime], capacitance: capSource },
+      hasHumidity: rows.some(r => r.humidity !== null),
+      hasTemperature: rows.some(r => r.temperature !== null),
+      hasRawHex: rows.some(r => r.rawHex !== null),
+      hasRawDec: rows.some(r => r.rawDec !== null),
+    };
+  }
+
+  // In-place radix-2 FFT (length must be a power of two).
+  function fftRadix2(re, im) {
+    const n = re.length;
+    for (let i = 1, j = 0; i < n; i++) {
+      let bit = n >> 1;
+      for (; j & bit; bit >>= 1) j ^= bit;
+      j ^= bit;
+      if (i < j) {
+        let t = re[i]; re[i] = re[j]; re[j] = t;
+        t = im[i]; im[i] = im[j]; im[j] = t;
+      }
+    }
+    const half = n >> 1;
+    const cosT = new Float64Array(half), sinT = new Float64Array(half);
+    for (let k = 0; k < half; k++) {
+      cosT[k] = Math.cos(-2 * Math.PI * k / n);
+      sinT[k] = Math.sin(-2 * Math.PI * k / n);
+    }
+    for (let len = 2; len <= n; len <<= 1) {
+      const h = len >> 1, step = n / len;
+      for (let i = 0; i < n; i += len) {
+        for (let k = 0; k < h; k++) {
+          const wr = cosT[k * step], wi = sinT[k * step];
+          const a = i + k, b = a + h;
+          const xr = re[b] * wr - im[b] * wi;
+          const xi = re[b] * wi + im[b] * wr;
+          re[b] = re[a] - xr; im[b] = im[a] - xi;
+          re[a] += xr; im[a] += xi;
+        }
+      }
+    }
+  }
+
+  // DFT of any length. Powers of two use the radix-2 FFT directly; every other
+  // length (e.g. the 1000-sample AD7746 capture) goes through Bluestein's
+  // algorithm, so all samples are used - same as numpy.fft.rfft.
+  function fftAny(re, im) {
+    const n = re.length;
+    if ((n & (n - 1)) === 0) {
+      const r = Float64Array.from(re), i = Float64Array.from(im);
+      fftRadix2(r, i);
+      return { re: r, im: i };
+    }
+    let m = 1;
+    while (m < 2 * n - 1) m <<= 1;
+    const wr = new Float64Array(n), wi = new Float64Array(n);   // w_k = exp(-i*pi*k^2/n)
+    for (let k = 0; k < n; k++) {
+      const ang = Math.PI * ((k * k) % (2 * n)) / n;
+      wr[k] = Math.cos(ang); wi[k] = -Math.sin(ang);
+    }
+    const ar = new Float64Array(m), ai = new Float64Array(m);
+    for (let k = 0; k < n; k++) {
+      ar[k] = re[k] * wr[k] - im[k] * wi[k];
+      ai[k] = re[k] * wi[k] + im[k] * wr[k];
+    }
+    const br = new Float64Array(m), bi = new Float64Array(m);   // conj(w), wrapped
+    br[0] = wr[0]; bi[0] = -wi[0];
+    for (let k = 1; k < n; k++) {
+      br[k] = br[m - k] = wr[k];
+      bi[k] = bi[m - k] = -wi[k];
+    }
+    fftRadix2(ar, ai);
+    fftRadix2(br, bi);
+    for (let k = 0; k < m; k++) {          // pointwise product, then inverse FFT via conjugation
+      const pr = ar[k] * br[k] - ai[k] * bi[k];
+      const pi = ar[k] * bi[k] + ai[k] * br[k];
+      ar[k] = pr; ai[k] = -pi;
+    }
+    fftRadix2(ar, ai);
+    const outRe = new Float64Array(n), outIm = new Float64Array(n);
+    for (let k = 0; k < n; k++) {
+      const cr = ar[k] / m, ci = -ai[k] / m;
+      outRe[k] = cr * wr[k] - ci * wi[k];
+      outIm[k] = cr * wi[k] + ci * wr[k];
+    }
+    return { re: outRe, im: outIm };
+  }
+
+  // Port of fft_analysis.py: remove the mean, apply a Hann window, take the FFT,
+  // and scale to a single-sided amplitude spectrum in the signal's own units (Pa).
+  function amplitudeSpectrum(values, dt) {
+    const n = values.length;
+    let mean = 0;
+    for (let i = 0; i < n; i++) mean += values[i];
+    mean /= n;
+
+    const w = new Float64Array(n);
+    let wSum = 0;
+    for (let i = 0; i < n; i++) {
+      w[i] = 0.5 - 0.5 * Math.cos(2 * Math.PI * i / (n - 1));   // same as numpy.hanning(n)
+      wSum += w[i];
+    }
+    const windowCorrection = 1 / (wSum / n);
+
+    const re = new Float64Array(n), im = new Float64Array(n);
+    for (let i = 0; i < n; i++) re[i] = (values[i] - mean) * w[i];
+    const X = fftAny(re, im);
+
+    const bins = (n >> 1) + 1;
+    const freqs = new Float64Array(bins), amplitude = new Float64Array(bins);
+    for (let k = 0; k < bins; k++) {
+      freqs[k] = k / (n * dt);
+      amplitude[k] = (2 / n) * Math.hypot(X.re[k], X.im[k]) * windowCorrection;
+    }
+    amplitude[0] /= 2;
+
+    let best = 1;
+    for (let k = 2; k < bins; k++) if (amplitude[k] > amplitude[best]) best = k;
+
+    return {
+      n, dt, fs: 1 / dt, freqs, amplitude,
+      resolution: 1 / (n * dt),
+      nyquist: 1 / (2 * dt),
+      dominant: { freq: freqs[best], amplitude: amplitude[best], period: 1 / freqs[best] },
+    };
+  }
+
+  // Peak-preserving thinning for long series: keeps the min and max of each bucket.
+  function decimate(points, maxBuckets = 2000) {
+    if (points.length <= maxBuckets * 2) return points;
+    const size = Math.ceil(points.length / maxBuckets);
+    const out = [];
+    for (let i = 0; i < points.length; i += size) {
+      const end = Math.min(i + size, points.length);
+      let lo = i, hi = i;
+      for (let j = i; j < end; j++) {
+        if (points[j].y < points[lo].y) lo = j;
+        if (points[j].y > points[hi].y) hi = j;
+      }
+      if (lo === hi) out.push(points[lo]);
+      else if (lo < hi) out.push(points[lo], points[hi]);
+      else out.push(points[hi], points[lo]);
+    }
+    return out;
+  }
+
+  // ===== ANALYSIS END =====
+
+
+  // ===== App =====
+  const API_BASE = '';               // same origin as this page by default
+  const POLL_INTERVAL_MS = 5000;
+  const STALE_AFTER_MS = 30000;      // mark "stale" if no new reading in 30s
+  const GRAPH_WINDOW_MS = 24 * 60 * 60 * 1000;   // live graphs show the last 24 hours
+  const MAX_FFT_SAMPLES = 16384;
+
+  const DEFAULT_CAL = {
+    slope: 0.02107,    // pF per Pa  (C = slope * dP + offset)
+    offset: 0.10864,   // pF
+    points: [
+      [0.00, 0.20], [19.62, 0.27], [39.24, 0.65], [58.86, 1.66], [78.48, 1.73], [98.10, 2.40],
+      [117.72, 2.80], [137.34, 2.82], [156.96, 3.59], [176.58, 3.716], [196.20, 4.096],
+    ],
+  };
+  const cloneCal = (c) => JSON.parse(JSON.stringify(c));
+
+  const TS_STYLES = ['line', 'area', 'scatter', 'step', 'points'];
+  const STYLE_LABELS = { line: 'Line', area: 'Area', scatter: 'Scatter', step: 'Step', points: 'Points' };
+  const STYLE_DEFS = {
+    line:    { showLine: true,  fill: false,    stepped: false, dots: false },
+    area:    { showLine: true,  fill: 'origin', stepped: false, dots: false },
+    scatter: { showLine: false, fill: false,    stepped: false, dots: true  },
+    step:    { showLine: true,  fill: false,    stepped: true,  dots: false },
+    points:  { showLine: true,  fill: false,    stepped: false, dots: true  },
+  };
+
+  const GRAPHS = {
+    pressure:    { title: 'Pressure vs time',        kind: 'ts',  field: 'pressure',    name: 'Pressure',    unit: 'Pa',  color: '#F0A63A', styles: TS_STYLES },
+    capacitance: { title: 'Capacitance vs time',     kind: 'ts',  field: 'capacitance', name: 'Capacitance', unit: 'pF',  color: '#2FD7C4', styles: TS_STYLES },
+    humidity:    { title: 'Humidity vs time',        kind: 'ts',  field: 'humidity',    name: 'Humidity',    unit: '%RH', color: '#5EA8F0', styles: TS_STYLES },
+    temperature: { title: 'Temperature vs time',     kind: 'ts',  field: 'temperature', name: 'Temperature', unit: '°C',  color: '#E2574C', styles: TS_STYLES },
+    fft:         { title: 'FFT of pressure',         kind: 'fft', color: '#A78BFA', styles: ['line', 'area', 'step', 'points'] },
+    pvc:         { title: 'Pressure vs capacitance', kind: 'pvc', styles: ['points', 'scatter'] },
+  };
+
+  const state = {
+    mode: 'live',            // 'live' | 'csv'
+    graph: 'pressure',
+    style: 'line',           // the user's preference; effectiveStyle() checks it suits the graph
+    cal: cloneCal(DEFAULT_CAL),
+    live: { rows: [], lastTs: null },
+    csv: null,               // parsed upload: { name, rows, timeKind, ... }
+  };
+
+  const $ = (id) => document.getElementById(id);
+
+  function esc(s) {
+    return String(s).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+  }
+  function fmtNum(v, digits) { return Number.isFinite(v) ? Number(v).toFixed(digits) : '—'; }
+  function fmtCoef(x) { return String(+Number(x).toPrecision(6)); }
+  function fmtDateTime(t) {
+    return new Date(t).toLocaleString([], {
+      month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit', second: '2-digit',
+    });
+  }
+  function setMsg(el, text, kind) { el.textContent = text; el.className = 'msg' + (kind ? ' ' + kind : ''); }
+
+  const isDatetime = () => state.mode === 'live' || (state.csv && state.csv.timeKind === 'datetime');
+
+  // Rows for whichever source is active, with pressure calculated from the calibration.
+  function getRows() {
+    const base = state.mode === 'live' ? state.live.rows : (state.csv ? state.csv.rows : []);
+    return base.map((r) => ({ ...r, pressure: pressureFromC(r.capacitance, state.cal) }));
+  }
+
+  // ---------- chart ----------
+  let currentXFmt = (v) => String(v);
+
+  const axisTitle = { display: true, text: '', color: '#8B96A5', font: { size: 11 } };
+  const mainChart = new Chart($('mainChart'), {
+    type: 'line',
+    data: { datasets: [] },
+    options: {
+      responsive: true,
+      maintainAspectRatio: false,
+      animation: false,
+      interaction: { mode: 'nearest', intersect: false, axis: 'x' },
+      scales: {
+        x: {
+          type: 'linear',
+          ticks: { color: '#8B96A5', maxTicksLimit: 6, callback: (v) => currentXFmt(v) },
+          grid: { color: '#232B36' },
+          title: { ...axisTitle },
+        },
+        y: {
+          ticks: { color: '#8B96A5' },
+          grid: { color: '#232B36' },
+          title: { ...axisTitle },
+        },
+      },
+      plugins: {
+        legend: { display: false, labels: { color: '#8B96A5' } },
+        tooltip: { callbacks: { title: (items) => (items.length ? currentXFmt(items[0].parsed.x) : '') } },
+      },
+    },
+  });
+
+  function effectiveStyle() {
+    const g = GRAPHS[state.graph];
+    return g.styles.includes(state.style) ? state.style : g.styles[0];
+  }
+
+  function styledDataset(label, data, color, style, dotRadius) {
+    return {
+      label,
+      data,
+      borderColor: color,
+      pointBackgroundColor: color,
+      pointBorderColor: color,
+      backgroundColor: style.fill ? color + '33' : 'transparent',
+      borderWidth: 1.5,
+      showLine: style.showLine,
+      fill: style.fill,
+      stepped: style.stepped,
+      pointRadius: style.dots ? dotRadius : 0,
+      pointHoverRadius: 4,
+      tension: 0,
+    };
+  }
+
+  function renderChart() {
+    const g = GRAPHS[state.graph];
+    const style = STYLE_DEFS[effectiveStyle()];
+    const rows = getRows();
+    const live = state.mode === 'live';
+
+    let datasets = [], note = '', xTitle = '', yTitle = '', xMin, xMax, showLegend = false;
+    let xFmt = (v) => String(v);
+
+    if (g.kind === 'ts') {
+      const pts = rows.filter((r) => Number.isFinite(r[g.field])).map((r) => ({ x: r.t, y: r[g.field] }));
+      const shown = decimate(pts);
+      datasets = [styledDataset(g.title, shown, g.color, style, 3)];
+      xFmt = isDatetime() ? fmtDateTime : (v) => `${+Number(v).toFixed(3)} s`;
+      xTitle = isDatetime() ? 'Time' : 'Time (s)';
+      yTitle = `${g.name} (${g.unit})`;
+      if (!pts.length) {
+        note = live ? 'Waiting for readings…' : (state.csv ? 'The file has no values for this graph.' : 'Choose a CSV file to plot.');
+      } else {
+        note = live ? `Last 24 hours · ${pts.length} readings` : `${state.csv.name} · ${pts.length} samples`;
+        if (shown.length < pts.length) note += ` · thinned to ${shown.length} points for drawing (peaks kept)`;
+      }
+    } else if (g.kind === 'fft') {
+      const usable = rows.filter((r) => Number.isFinite(r.pressure)).slice(-MAX_FFT_SAMPLES);
+      xTitle = 'Frequency (Hz)';
+      yTitle = 'Amplitude (Pa)';
+      xFmt = (v) => `${+Number(v).toFixed(4)} Hz`;
+      if (usable.length < 8) {
+        note = 'Not enough samples for an FFT yet (need at least 8).';
+      } else {
+        const scale = isDatetime() ? 1000 : 1;   // timestamps are in ms, CSV seconds are already seconds
+        const dts = [];
+        for (let i = 1; i < usable.length; i++) {
+          const d = (usable[i].t - usable[i - 1].t) / scale;
+          if (d > 0) dts.push(d);
+        }
+        const dt = dts.length ? median(dts) : 0;
+        if (!(dt > 0)) {
+          note = 'Sample times are not increasing, so the frequency axis cannot be worked out.';
+        } else {
+          const spec = amplitudeSpectrum(usable.map((r) => r.pressure), dt);
+          const pts = Array.from(spec.freqs, (f, i) => ({ x: f, y: spec.amplitude[i] }));
+          datasets = [styledDataset('Amplitude (Pa)', decimate(pts), g.color, style, 2)];
+          xMin = 0; xMax = spec.nyquist;
+          note = `N = ${spec.n} samples · fs = ${+spec.fs.toFixed(3)} Hz · resolution = ${+spec.resolution.toFixed(4)} Hz · Nyquist = ${+spec.nyquist.toFixed(3)} Hz · ` +
+                 `dominant ${+spec.dominant.freq.toFixed(4)} Hz (period ${+spec.dominant.period.toFixed(3)} s), ${+spec.dominant.amplitude.toFixed(3)} Pa`;
+          if (usable.length === MAX_FFT_SAMPLES) note += ' · using the latest 16384 samples';
+          if (live && spec.nyquist < 1) note += ` · only frequencies up to ${+spec.nyquist.toFixed(3)} Hz can appear, because readings arrive that slowly`;
+        }
+      }
+    } else {   // 'pvc' - the calibration curve
+      const pts = state.cal.points.map(([p, c]) => ({ x: p, y: c }));
+      const xmax = Math.max(1, ...pts.map((p) => p.x));
+      const { slope, offset } = state.cal;
+      const r2 = rSquared(pts.map((p) => p.x), pts.map((p) => p.y), slope, offset);
+      const fitStyle = { showLine: true, fill: false, stepped: false, dots: false };
+      const fit = styledDataset(`Fit: C = ${fmtCoef(slope)}·ΔP ${offset < 0 ? '−' : '+'} ${fmtCoef(Math.abs(offset))}`,
+        [{ x: 0, y: offset }, { x: xmax, y: slope * xmax + offset }], '#F0A63A', fitStyle, 0);
+      fit.borderDash = [6, 4];
+      datasets = [styledDataset('Calibration points', pts, '#5EA8F0', style, 4), fit];
+      showLegend = true;
+      xTitle = 'Differential pressure ΔP (Pa)';
+      yTitle = 'Capacitance (pF)';
+      xMin = 0;
+      xFmt = (v) => `${+Number(v).toFixed(2)} Pa`;
+      note = `${pts.length} calibration points · sensitivity ${fmtCoef(slope)} pF/Pa · R² = ${r2.toFixed(4)} against the applied line`;
+    }
+
+    currentXFmt = xFmt;
+    mainChart.data.datasets = datasets;
+    mainChart.options.scales.x.min = xMin;
+    mainChart.options.scales.x.max = xMax;
+    mainChart.options.scales.x.title.text = xTitle;
+    mainChart.options.scales.y.title.text = yTitle;
+    mainChart.options.plugins.legend.display = showLegend;
+    mainChart.update();
+
+    $('chartTitle').textContent = g.title;
+    $('chartNote').textContent = note;
+  }
+
+  function syncStyleOptions() {
+    const g = GRAPHS[state.graph];
+    const eff = effectiveStyle();
+    $('styleSelect').innerHTML = g.styles.map((s) => `<option value="${s}">${STYLE_LABELS[s]}</option>`).join('');
+    $('styleSelect').value = eff;
+  }
+
+  function refreshGraphOptions() {
+    const live = state.mode === 'live';
+    const availability = {
+      humidity: live || !!(state.csv && state.csv.hasHumidity),
+      temperature: live || !!(state.csv && state.csv.hasTemperature),
+    };
+    for (const opt of $('graphSelect').options) {
+      if (opt.value in availability) {
+        opt.disabled = !availability[opt.value];
+        opt.textContent = GRAPHS[opt.value].title + (availability[opt.value] ? '' : ' (no data)');
+      }
+    }
+    if (state.graph in availability && !availability[state.graph]) state.graph = 'pressure';
+    $('graphSelect').value = state.graph;
+    syncStyleOptions();
+  }
+
+  $('graphSelect').addEventListener('change', (e) => {
+    state.graph = e.target.value;
+    syncStyleOptions();
+    renderChart();
+  });
+  $('styleSelect').addEventListener('change', (e) => {
+    state.style = e.target.value;
+    renderChart();
+  });
+
+  // ---------- raw data table ----------
+  function renderRawTable() {
+    const rows = getRows();
+    const live = state.mode === 'live';
+    const cols = [];
+
+    if (live) {
+      cols.push({ head: 'Timestamp', cell: (r) => fmtDateTime(r.t) });
+    } else if (isDatetime()) {
+      cols.push({ head: 'Timestamp', cell: (r) => fmtDateTime(r.t) });
+    } else {
+      cols.push({ head: 'Time (s)', cell: (r) => +Number(r.t).toFixed(4) });
+    }
+    if (!live && state.csv && state.csv.hasRawHex) cols.push({ head: 'Raw hex', cell: (r) => esc(r.rawHex ?? '—') });
+    if (!live && state.csv && state.csv.hasRawDec) cols.push({ head: 'Raw decimal', cell: (r) => (r.rawDec ?? '—') });
+    cols.push({ head: 'Capacitance (pF)', cell: (r) => fmtNum(r.capacitance, 4) });
+    cols.push({ head: 'Pressure (Pa)', cell: (r) => fmtNum(r.pressure, 2) });
+    if (live || (state.csv && state.csv.hasHumidity)) cols.push({ head: 'Humidity (%RH)', cell: (r) => fmtNum(r.humidity, 1) });
+    if (live || (state.csv && state.csv.hasTemperature)) cols.push({ head: 'Temperature (°C)', cell: (r) => fmtNum(r.temperature, 1) });
+
+    $('rawTableHead').innerHTML = '<tr>' + cols.map((c) => `<th>${c.head}</th>`).join('') + '</tr>';
+
+    if (!rows.length) {
+      $('rawTableBody').innerHTML = '';
+      $('rawNote').textContent = live ? 'No readings yet.' : 'No file loaded.';
+      return;
+    }
+    const shown = live ? rows.slice(-20) : rows.slice(0, 20);
+    $('rawTableBody').innerHTML = shown
+      .map((r) => '<tr>' + cols.map((c) => `<td>${c.cell(r)}</td>`).join('') + '</tr>')
+      .join('');
+    $('rawNote').textContent = live
+      ? 'Most recent 20 readings.'
+      : `First ${shown.length} of ${rows.length} samples.`;
+  }
+
+  function renderAll() {
+    renderChart();
+    renderRawTable();
+  }
+
+  // ---------- status ----------
+  function updateStatus(lastTs) {
+    const dot = $('statusDot'), text = $('statusText');
+    if (!lastTs) {
+      dot.className = 'dot';
+      text.textContent = 'waiting for first reading…';
+      return;
+    }
+    const age = Date.now() - new Date(lastTs).getTime();
+    if (age < STALE_AFTER_MS) {
+      dot.className = 'dot live';
+      text.textContent = `live — last reading ${fmtDateTime(lastTs)}`;
+    } else {
+      dot.className = 'dot stale';
+      text.textContent = `no new data since ${fmtDateTime(lastTs)}`;
+    }
+  }
+
+  function updateFileStatus() {
+    const dot = $('statusDot'), text = $('statusText');
+    if (!state.csv) {
+      dot.className = 'dot';
+      text.textContent = 'no file loaded';
+      return;
+    }
+    dot.className = 'dot file';
+    const n = state.csv.rows.length;
+    const first = state.csv.rows[0].t, last = state.csv.rows[n - 1].t;
+    const span = state.csv.timeKind === 'seconds' ? ` · ${+(last - first).toFixed(2)} s` : '';
+    text.textContent = `file: ${state.csv.name} · ${n} samples${span}`;
+  }
+
+  // ---------- live mode: map, readouts, polling ----------
+  const map = L.map('map', { zoomControl: false, attributionControl: false }).setView([0, 0], 2);
+  L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png').addTo(map);
+  let marker = null;
+
+  let pollTimer = null;
+
+  async function poll() {
+    try {
+      const since = new Date(Date.now() - GRAPH_WINDOW_MS).toISOString();
+      const res = await fetch(`${API_BASE}/api/readings?since=${encodeURIComponent(since)}`);
+      const readings = await res.json();
+      if (state.mode !== 'live') return;   // user switched to CSV while this was in flight
+
+      state.live.rows = readings.map((r) => ({
+        t: Date.parse(r.ts),
+        capacitance: r.capacitance,
+        humidity: r.humidity,
+        temperature: r.temperature,
+        rawHex: null,
+        rawDec: null,
+      }));
+      renderAll();
+
+      if (!readings.length) {
+        state.live.lastTs = null;
+        updateStatus(null);
+        return;
+      }
+      const latest = readings[readings.length - 1];
+      state.live.lastTs = latest.ts;
+      $('humValue').innerHTML = `${fmtNum(latest.humidity, 1)}<span class="readout-unit"> %RH</span>`;
+      $('tempValue').innerHTML = `${fmtNum(latest.temperature, 1)}<span class="readout-unit"> °C</span>`;
+
+      if (latest.lat != null && latest.lon != null) {
+        const pos = [latest.lat, latest.lon];
+        if (!marker) {
+          marker = L.marker(pos).addTo(map);
+          map.setView(pos, 14);
+        } else {
+          marker.setLatLng(pos);
+        }
+      }
+      updateStatus(latest.ts);
+    } catch (err) {
+      console.error('Failed to fetch readings', err);
+      if (state.mode === 'live') $('statusText').textContent = 'cannot reach backend';
+    }
+  }
+
+  function startPolling() {
+    if (pollTimer) return;
+    poll();
+    pollTimer = setInterval(poll, POLL_INTERVAL_MS);
+  }
+
+  function stopPolling() {
+    clearInterval(pollTimer);
+    pollTimer = null;
+  }
+
+  // ---------- mode switch ----------
+  function setMode(mode) {
+    state.mode = mode;
+    $('modeLive').classList.toggle('active', mode === 'live');
+    $('modeCsv').classList.toggle('active', mode === 'csv');
+    $('csvPanel').hidden = mode !== 'csv';
+    // Location and historical-data download only make sense for the live station.
+    $('locationPanel').hidden = mode !== 'live';
+    $('exportPanel').hidden = mode !== 'live';
+
+    refreshGraphOptions();
+    if (mode === 'live') {
+      updateStatus(state.live.lastTs);
+      setTimeout(() => map.invalidateSize(), 0);
+      renderAll();
+      startPolling();
+    } else {
+      stopPolling();
+      updateFileStatus();
+      renderAll();
+    }
+  }
+
+  $('modeLive').addEventListener('click', () => setMode('live'));
+  $('modeCsv').addEventListener('click', () => setMode('csv'));
+
+  // ---------- CSV upload ----------
+  function readFileText(file) {
+    return new Promise((resolve, reject) => {
+      const reader = new FileReader();
+      reader.onload = () => resolve(String(reader.result));
+      reader.onerror = () => reject(new Error('Could not read the file.'));
+      reader.readAsText(file);
+    });
+  }
+
+  $('csvFile').addEventListener('change', async (e) => {
+    const file = e.target.files && e.target.files[0];
+    if (!file) return;
+    try {
+      const parsed = parseCsv(await readFileText(file), state.cal);
+      state.csv = { name: file.name, ...parsed };
+      let msg = `Loaded ${parsed.rows.length} samples. Time from "${parsed.used.time}", capacitance from "${parsed.used.capacitance}".`;
+      if (parsed.skipped) msg += ` ${parsed.skipped} unreadable rows were skipped.`;
+      setMsg($('csvMsg'), msg, 'ok');
+    } catch (err) {
+      setMsg($('csvMsg'), err.message, 'error');
+    }
+    refreshGraphOptions();
+    updateFileStatus();
+    renderAll();
+    e.target.value = '';   // lets you pick the same file again after editing it
+  });
+
+  // ---------- calibration ----------
+  function equationText(cal) {
+    const sign = cal.offset < 0 ? '−' : '+';
+    const b = fmtCoef(Math.abs(cal.offset));
+    return `C = ${fmtCoef(cal.slope)}·ΔP ${sign} ${b}      →      ΔP = (C ${sign === '+' ? '−' : '+'} ${b}) / ${fmtCoef(cal.slope)}`;
+  }
+
+  function renderCalibrationUi() {
+    $('calSlope').value = state.cal.slope;
+    $('calOffset').value = state.cal.offset;
+    $('calEquation').textContent = equationText(state.cal);
+    $('calPoints').value = state.cal.points.map(([p, c]) => `${p}, ${c}`).join('\n');
+  }
+
+  async function commitCalibration(cal) {
+    state.cal = cal;
+    renderCalibrationUi();
+    renderAll();
+    try {
+      const res = await fetch(`${API_BASE}/api/calibration`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(cal),
+      });
+      if (!res.ok) throw new Error('save failed');
+      setMsg($('calMsg'), 'Applied and saved on the server — graphs, the table and exports all use it now.', 'ok');
+    } catch (err) {
+      setMsg($('calMsg'), "Applied here, but couldn't save it to the server, so it will revert when you reload.", 'warn');
+    }
+  }
+
+  $('calApply').addEventListener('click', () => {
+    const slope = parseFloat($('calSlope').value);
+    const offset = parseFloat($('calOffset').value);
+    if (!Number.isFinite(slope) || !Number.isFinite(offset) || slope === 0) {
+      setMsg($('calMsg'), 'Enter numbers for both values — sensitivity cannot be 0.', 'error');
+      return;
+    }
+    const parsed = parseCalPoints($('calPoints').value);
+    if (parsed.error) { setMsg($('calMsg'), parsed.error, 'error'); return; }
+    commitCalibration({ slope, offset, points: parsed.points });
+  });
+
+  $('calReset').addEventListener('click', () => commitCalibration(cloneCal(DEFAULT_CAL)));
+
+  $('calFit').addEventListener('click', () => {
+    const parsed = parseCalPoints($('calPoints').value);
+    if (parsed.error) { setMsg($('calMsg'), parsed.error, 'error'); return; }
+    const fit = linearFit(parsed.points.map((p) => p[0]), parsed.points.map((p) => p[1]));
+    if (!fit) { setMsg($('calMsg'), 'The pressures must not all be the same.', 'error'); return; }
+    $('calSlope').value = fit.slope;
+    $('calOffset').value = fit.intercept;
+    setMsg($('calMsg'),
+      `Fit: C = ${fmtCoef(fit.slope)}·ΔP ${fit.intercept < 0 ? '−' : '+'} ${fmtCoef(Math.abs(fit.intercept))}, R² = ${fit.r2.toFixed(4)}. Press Apply to use it.`, 'ok');
+  });
+
+  async function loadCalibration() {
+    try {
+      const res = await fetch(`${API_BASE}/api/calibration`);
+      if (res.ok) {
+        const c = await res.json();
+        if (Number.isFinite(c.slope) && c.slope !== 0 && Number.isFinite(c.offset) && Array.isArray(c.points)) state.cal = c;
+      }
+    } catch (err) {
+      console.warn('Using default calibration - server not reachable', err);
+    }
+    renderCalibrationUi();
+  }
+
+  // ---------- export (live mode only) ----------
+  async function fetchAllReadings() {
+    const res = await fetch(`${API_BASE}/api/readings?limit=100000`);
+    return res.json();
+  }
+
+  function toCsv(readings) {
+    const header = ['timestamp', 'capacitance_pF', 'pressure_Pa', 'humidity_percentRH', 'temperature_C', 'latitude', 'longitude'];
+    const lines = readings.map((r) => [r.ts, r.capacitance, r.pressure, r.humidity, r.temperature, r.lat, r.lon].join(','));
+    return [header.join(','), ...lines].join('\n');
+  }
+
+  function triggerDownload(content, filename, mime) {
+    const blob = new Blob([content], { type: mime });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = filename;
+    a.click();
+    URL.revokeObjectURL(url);
+  }
+
+  $('downloadCsv').addEventListener('click', async () => {
+    const readings = await fetchAllReadings();
+    triggerDownload(toCsv(readings), `microbarometer-readings-${Date.now()}.csv`, 'text/csv');
+  });
+
+  $('downloadJson').addEventListener('click', async () => {
+    const readings = await fetchAllReadings();
+    triggerDownload(JSON.stringify(readings, null, 2), `microbarometer-readings-${Date.now()}.json`, 'application/json');
+  });
+
+  // ---------- start ----------
+  (async function init() {
+    await loadCalibration();
+    setMode('live');
+  })();
+</script>
+
+</body>
+</html>
